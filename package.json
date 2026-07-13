@@ -1,0 +1,17 @@
+{
+  "name": "vardan-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Hospital operations dashboard and AI assistant backend",
+  "scripts": { "start": "node server.js", "dev": "node --watch server.js" },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "groq-sdk": "^0.31.0",
+    "mammoth": "^1.9.1",
+    "multer": "^2.0.2",
+    "node-cron": "^4.2.1",
+    "pdf-parse": "^1.1.1",
+    "xlsx": "^0.18.5"
+  }
+}
