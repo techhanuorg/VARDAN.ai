@@ -21,3 +21,7 @@ Set new credentials in `.env` (never commit the file):
 - `GOOGLE_SHEETS_WEBHOOK_URL` receives newly imported contacts for Google Sheets mirroring.
 
 The server persists records in a local SQLite database under `data/` and uploaded files under `uploads/`. Those folders are intentionally excluded from Git.
+
+## Render deployment
+
+The included `render.yaml` deploys the web service to Render. Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in Render's Environment settings before the first deploy. Render's free service is suitable for preview only: it sleeps when idle and has no persistent disk, so WhatsApp Web sessions, SQLite data, and uploaded files require persistent hosting for production.
