@@ -9,6 +9,7 @@ const XLSX = require('xlsx');
 const mammoth = require('mammoth');
 const pdf = require('pdf-parse');
 const Groq = require('groq-sdk');
+const QRCode = require('qrcode');
 const { DatabaseSync } = require('node:sqlite');
 
 const app = express();
@@ -22,12 +23,13 @@ db.exec(`CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY CHECK(id=1), p
 CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT, category TEXT NOT NULL, path TEXT NOT NULL, extracted_text TEXT, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS deliveries (id TEXT PRIMARY KEY, campaign_id TEXT, recipient TEXT, status TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL);`);
 const emptyState = { hospital:{}, doctors:[], contacts:[], groups:[], campaigns:[], media:[], knowledge:[], broadcasts:[] };
+const waWeb = { socket:null, status:'disconnected', qr:null, error:null, starting:false };
 function getState(){ const row=db.prepare('SELECT payload FROM state WHERE id=1').get(); return row ? JSON.parse(row.payload) : structuredClone(emptyState); }
 function putState(body){ const payload=JSON.stringify({ ...emptyState, ...body }); db.prepare('INSERT INTO state(id,payload,updated_at) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').run(payload,new Date().toISOString()); return JSON.parse(payload); }
 function id(){ return crypto.randomUUID(); }
 const upload=multer({storage:multer.diskStorage({destination:uploadDir,filename:(_,f,cb)=>cb(null,`${Date.now()}-${crypto.randomUUID()}${path.extname(f.originalname)}`)}),limits:{fileSize:20*1024*1024}});
 app.use(express.json({limit:'15mb'})); app.use('/uploads',express.static(uploadDir)); app.use(express.static(root));
-app.get('/api/health',(_,res)=>res.json({ok:true,service:'VARDAN.ai',integrations:{groq:!!process.env.GROQ_API_KEY,whatsapp:!!((process.env.WATI_API_ENDPOINT&&process.env.WATI_API_TOKEN&&process.env.WATI_CHANNEL_NUMBER)||(process.env.WHATSAPP_TOKEN&&process.env.WHATSAPP_PHONE_NUMBER_ID)),whatsappProvider:process.env.WATI_API_TOKEN?'WATI':process.env.WHATSAPP_TOKEN?'Meta Cloud API':'not configured',sheets:!!process.env.GOOGLE_SHEETS_WEBHOOK_URL}}));
+app.get('/api/health',(_,res)=>res.json({ok:true,service:'VARDAN.ai',integrations:{groq:!!process.env.GROQ_API_KEY,whatsapp:!!(process.env.WHATSAPP_WEB_ENABLED==='true'||(process.env.WATI_API_ENDPOINT&&process.env.WATI_API_TOKEN&&process.env.WATI_CHANNEL_NUMBER)||(process.env.WHATSAPP_TOKEN&&process.env.WHATSAPP_PHONE_NUMBER_ID)),whatsappProvider:process.env.WHATSAPP_WEB_ENABLED==='true'?'WhatsApp Web':process.env.WATI_API_TOKEN?'WATI':process.env.WHATSAPP_TOKEN?'Meta Cloud API':'not configured',sheets:!!process.env.GOOGLE_SHEETS_WEBHOOK_URL}}));
 app.get('/api/state',(_,res)=>res.json(getState()));
 app.put('/api/state',(req,res)=>res.json(putState(req.body)));
 
@@ -41,7 +43,24 @@ async function mirrorContacts(contacts){if(!process.env.GOOGLE_SHEETS_WEBHOOK_UR
 async function extractText(file){if(/\.txt$/i.test(file.originalname))return fs.readFileSync(file.path,'utf8');if(/\.docx$/i.test(file.originalname))return (await mammoth.extractRawText({path:file.path})).value;if(/\.pdf$/i.test(file.originalname))return (await pdf(fs.readFileSync(file.path))).text;return '';}
 app.post('/api/files/:category',upload.single('file'),async(req,res)=>{try{const category=req.params.category;if(!['media','knowledge'].includes(category)||!req.file)return res.status(400).json({error:'Choose a media or knowledge file'});const item={id:id(),name:req.file.originalname,type:req.file.mimetype||path.extname(req.file.originalname),category,path:`/uploads/${req.file.filename}`,createdAt:new Date().toISOString()};const extracted=category==='knowledge'?await extractText(req.file):'';db.prepare('INSERT INTO files VALUES(?,?,?,?,?,?,?)').run(item.id,item.name,item.type,item.category,item.path,extracted,item.createdAt);const state=getState();state[category].push(item);putState(state);res.json(item);}catch(e){res.status(400).json({error:`Upload failed: ${e.message}`})}});
 
+async function startWhatsAppWeb(){
+  if(process.env.WHATSAPP_WEB_ENABLED!=='true')throw new Error('Set WHATSAPP_WEB_ENABLED=true in .env, then restart the server.');
+  if(waWeb.starting||waWeb.status==='connected')return;
+  waWeb.starting=true;waWeb.error=null;waWeb.status='connecting';
+  try{
+    const {default:makeWASocket,useMultiFileAuthState,DisconnectReason,fetchLatestBaileysVersion}=await import('@whiskeysockets/baileys');
+    const pino=(await import('pino')).default;
+    const {state,saveCreds}=await useMultiFileAuthState(path.join(dataDir,'whatsapp-web-session'));
+    const {version}=await fetchLatestBaileysVersion();
+    const socket=makeWASocket({version,auth:state,printQRInTerminal:false,logger:pino({level:'silent'}),browser:['VARDAN.ai','Chrome','1.0.0']});waWeb.socket=socket;
+    socket.ev.on('creds.update',saveCreds);
+    socket.ev.on('connection.update',async({connection,lastDisconnect,qr})=>{if(qr)waWeb.qr=await QRCode.toDataURL(qr);if(connection==='open'){waWeb.status='connected';waWeb.qr=null;waWeb.starting=false;}if(connection==='close'){waWeb.socket=null;waWeb.starting=false;const code=lastDisconnect?.error?.output?.statusCode;if(code===DisconnectReason.loggedOut){waWeb.status='logged_out';waWeb.qr=null;}else{waWeb.status='disconnected';setTimeout(()=>startWhatsAppWeb().catch(e=>waWeb.error=e.message),2500);}}});
+  }catch(e){waWeb.status='error';waWeb.error=e.message;waWeb.starting=false;throw e;}
+}
+app.get('/api/whatsapp-web/status',(_,res)=>res.json({enabled:process.env.WHATSAPP_WEB_ENABLED==='true',status:waWeb.status,qr:waWeb.qr,error:waWeb.error}));
+app.post('/api/whatsapp-web/connect',async(_,res)=>{try{await startWhatsAppWeb();res.json({status:waWeb.status,qr:waWeb.qr});}catch(e){res.status(400).json({error:e.message})}});
 async function sendWhatsApp(phone,text,templateName,broadcastName){
+  if(process.env.WHATSAPP_WEB_ENABLED==='true'){if(waWeb.status!=='connected'||!waWeb.socket)throw new Error('Scan the WhatsApp Web QR in Hospital Settings before sending.');return waWeb.socket.sendMessage(`${phone.replace(/\D/g,'')}@s.whatsapp.net`,{text});}
   if(process.env.WATI_API_ENDPOINT&&process.env.WATI_API_TOKEN&&process.env.WATI_CHANNEL_NUMBER){
     if(!templateName)throw new Error('Choose a WATI-approved template before sending.');
     const base=process.env.WATI_API_ENDPOINT.replace(/\/$/,'');
