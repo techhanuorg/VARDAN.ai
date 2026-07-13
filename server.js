@@ -36,7 +36,7 @@ const upload=multer({storage:multer.diskStorage({destination:uploadDir,filename:
 app.use(express.json({limit:'15mb'})); app.use('/uploads',express.static(uploadDir)); app.use(express.static(root));
 app.get('/api/health',(_,res)=>res.json({ok:true,service:'VARDAN.ai',integrations:{groq:!!process.env.GROQ_API_KEY,whatsapp:!!(process.env.WHATSAPP_WEB_ENABLED==='true'||(process.env.WATI_API_ENDPOINT&&process.env.WATI_API_TOKEN&&process.env.WATI_CHANNEL_NUMBER)||(process.env.WHATSAPP_TOKEN&&process.env.WHATSAPP_PHONE_NUMBER_ID)),whatsappProvider:process.env.WHATSAPP_WEB_ENABLED==='true'?'WhatsApp Web':process.env.WATI_API_TOKEN?'WATI':process.env.WHATSAPP_TOKEN?'Meta Cloud API':'not configured',sheets:!!process.env.GOOGLE_SHEETS_WEBHOOK_URL}}));
 app.get('/api/state',(_,res)=>res.json(getState()));
-app.put('/api/state',(req,res)=>res.json(putState(req.body)));
+app.put('/api/state',(req,res)=>{const previous=getState(),next={...previous,...req.body};for(const key of ['contacts','appointments']){const records=new Map((previous[key]||[]).map(item=>[item.id,item]));for(const item of (req.body[key]||[]))records.set(item.id,item);next[key]=[...records.values()];}res.json(putState(next));});
 
 function normalizePhone(v=''){return String(v).replace(/[^\d+]/g,'');}
 function contactFromRow(row={}){ const get=(...keys)=>{const k=Object.keys(row).find(x=>keys.some(key=>x.toLowerCase().includes(key)));return k?String(row[k]||''):''}; const phone=normalizePhone(get('phone','mobile','tel','number')); return {id:id(),name:get('name','first','full name'),phone,email:get('email'),company:get('company','organization','org'),notes:get('note','comment'),valid:/^\+?\d{7,15}$/.test(phone)}; }
