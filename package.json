@@ -9,9 +9,12 @@
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc13",
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
     "groq-sdk": "^0.31.0",
+    "jsonwebtoken": "^9.0.3",
     "mammoth": "^1.9.1",
     "multer": "^2.0.2",
     "node-cron": "^4.2.1",
