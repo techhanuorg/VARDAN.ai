@@ -30,10 +30,11 @@ CREATE TABLE IF NOT EXISTS whatsapp_messages (id TEXT PRIMARY KEY, phone TEXT NO
 // This is only the first-run, owner-editable hospital profile. The dashboard remains
 // the source of truth and can change every one of these fields without a code change.
 const defaultHospital = {
-  name:'VARDAN HOSPITAL', phone:'+91 6354554461',
-  address:'Near Janta Hospital, Sonpur, Saran, Bihar',
+  name:'VARDAN HOSPITAL', phone:'+918318141915',
+  address:'RTO Office Road, Near Adnan Complex, Nazir Pura, Rajapur Mafi, Bahraich, Uttar Pradesh - 271801',
   timing:'Open 24x7', emergency:'Emergency services available 24x7',
-  departments:'General Medicine, Orthopedics, Gynecology, Pediatrics, ENT, Dental, Physiotherapy, Pathology and Pharmacy',
+  departments:'General OPD, IPD, ICU, Operation Theatre (OT), Pediatrics, Physiotherapy, Obesity Treatment, Blood Pressure Treatment, Thyroid Treatment, Joint Pain Treatment and Emergency Care',
+  facilities:'Wheelchair accessible parking, modern equipment, clean and hygienic environment, professional doctors, friendly staff and quick appointment process',
   appointmentNote:'Appointments are subject to doctor availability. Patients should bring previous reports and prescriptions.'
 };
 const emptyState = { hospital:defaultHospital, doctors:[], contacts:[], groups:[], campaigns:[], media:[], knowledge:[], broadcasts:[], appointments:[] };
@@ -67,6 +68,7 @@ function registrationFieldsFromMessage(text=''){
 }
 function registrationMissing(data){return ['name','age','mobile','gender'].filter(key=>!data[key]);}
 function registrationPrompt(language,missing){const labels={hi:{name:'पूरा नाम',age:'उम्र',mobile:'mobile number',gender:'gender'},en:{name:'full name',age:'age',mobile:'mobile number',gender:'gender'}}[language==='hi'?'hi':'en'];const wanted=missing.map(key=>labels[key]).join(', ');return language==='hi'?`धन्यवाद। कृपया केवल यह detail भेजें: ${wanted}। आप किसी भी format में लिख सकते हैं।`:`Thank you. Please send only this missing detail: ${wanted}. You may write it in any format.`;}
+function registrationWelcome(language){return language==='hi'?'🙏 नमस्ते। VARDAN HOSPITAL में आपका स्वागत है।\n\nरजिस्ट्रेशन के लिए एक ही message में नाम, उम्र, लिंग और mobile number भेजें। आप किसी भी तरीके से लिख सकते हैं—जैसे: राम 24 पुरुष 9876543210':'🙏 Welcome to VARDAN HOSPITAL.\n\nFor registration, send your name, age, gender and mobile number in one message. Any format is fine—for example: Ram 24 Male 9876543210';}
 function applyRegistrationInput(s,text){const previous=JSON.parse(s.data||'{}'),incoming=registrationFieldsFromMessage(text),data={...previous,...incoming};if(incoming.name)s.patient_name=incoming.name;s.data=JSON.stringify(data);return {data,missing:registrationMissing({...data,name:s.patient_name})};}
 function registerPatientFromMessage(state,s,phone,details){s.patient_name=details.name;s.data=JSON.stringify({age:details.age,mobile:details.mobile,gender:details.gender});s.step='menu';setSession(s);const patient=savePatientRegistration(state,s,phone,details);syncToSheets(state,'patients',[patient]).catch(console.error);}
 function savePatientRegistration(state,s,phone,details){const existing=state.contacts.find(c=>c.phone.replace(/\D/g,'')===(details.mobile||phone).replace(/\D/g,'')),now=new Date(),patient={id:id(),patientId:`PAT-${now.getTime()}-${Math.floor(Math.random()*900+100)}`,name:s.patient_name,phone:details.mobile||`+${phone}`,age:details.age,gender:details.gender,email:'',company:'',notes:'Registered through WhatsApp',status:'Registered',source:'WhatsApp',registrationDate:now.toISOString().slice(0,10),registrationTime:now.toLocaleTimeString('en-IN'),valid:true};if(existing){Object.assign(existing,patient,{id:existing.id,patientId:existing.patientId||patient.patientId});putState(state);return existing;}state.contacts.push(patient);putState(state);return patient;}
@@ -129,11 +131,14 @@ function parseFlexibleDateTime(requested){const text=requested.toLowerCase(),now
 function appointmentSuggestion(state,doctor,requested){const parsed=parseFlexibleDateTime(requested);if(!parsed)return null;let candidate=parsed,days=(doctor.availableDays||'').toLowerCase(),tries=0;while(tries++<21){const day=candidate.toLocaleDateString('en-US',{weekday:'long'}).toLowerCase();const unavailable=days&&days!=='all days'&&!days.includes(day)&&!days.includes(day.slice(0,3));const taken=state.appointments.some(a=>a.doctorId===doctor.id&&a.timeKey===dateTimeKey(candidate)&&a.status!=='cancelled');if(!unavailable&&!taken)return {date:candidate,key:dateTimeKey(candidate),changed:dateTimeKey(parsed)!==dateTimeKey(candidate)};candidate=new Date(candidate.getTime()+86400000);}return null;}
 async function handleIncomingWhatsApp(socket,jid,text){
   const phone=jid.split('@')[0].replace(/\D/g,'');if(!phone)return;let s=getSession(phone),state=getState(),clean=text.trim(),lower=clean.toLowerCase();
-  const chosenLanguage=languageFromMessage(clean),combinedDetails=registrationFieldsFromMessage(clean),hasDetails=Object.keys(combinedDetails).length>0;
-  if((['hi','hello','hii','start','menu','नमस्ते','हाय'].includes(lower)||!s.step)&&!(chosenLanguage&&hasDetails)){s={phone,step:'language',language:'',patient_name:'',data:'{}'};setSession(s);return socket.sendMessage(jid,{text:words('en').welcome});}
+  const chosenLanguage=languageFromMessage(clean),combinedDetails=registrationFieldsFromMessage(clean),hasDetails=Object.keys(combinedDetails).length>0,greeting=['hi','hello','hii','start','menu','नमस्ते','हाय'].includes(lower),existingPatient=state.contacts.find(contact=>normalizePhone(contact.phone).replace(/\D/g,'')===phone);
+  if((greeting||!s.step)&&!(chosenLanguage&&hasDetails)){
+    if(existingPatient){s={phone,step:'menu',language:/[\u0900-\u097f]/u.test(clean)?'hi':'en',patient_name:existingPatient.name||'',data:JSON.stringify({age:existingPatient.age,gender:existingPatient.gender,mobile:existingPatient.phone})};setSession(s);return socket.sendMessage(jid,{text:words(s.language).menu});}
+    s={phone,step:'registration',language:/[\u0900-\u097f]/u.test(clean)||chosenLanguage==='hi'?'hi':'en',patient_name:'',data:'{}'};setSession(s);return socket.sendMessage(jid,{text:registrationWelcome(s.language)});
+  }
   if(s.step==='language'){
-    if(!chosenLanguage)return socket.sendMessage(jid,{text:words('en').welcome});
-    s.language=chosenLanguage;s.step='registration';
+    if(!chosenLanguage&&!hasDetails)return socket.sendMessage(jid,{text:registrationWelcome('en')});
+    s.language=chosenLanguage||(/[\u0900-\u097f]/u.test(clean)?'hi':'en');s.step='registration';
     const progress=applyRegistrationInput(s,clean);
     if(progress.missing.length){setSession(s);return socket.sendMessage(jid,{text:registrationPrompt(s.language,progress.missing)});}
     registerPatientFromMessage(state,s,phone,{...progress.data,name:s.patient_name});return socket.sendMessage(jid,{text:words(s.language).registered.replace('{name}',s.patient_name)});
